@@ -1,0 +1,312 @@
+#!/bin/bash
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; version 2 of the License.
+   
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+
+# This script is the integration of all protocols from raw reads processing
+# to contact matrix generating.
+#
+# Written by Wang Meng, 2016-06-13.
+
+VERSION=0.1
+
+# Default settings
+LIB_PATH=$(dirname $(readlink -e $0)) #absolute path of this file
+REF_GENOME=""                         #reference genome file path
+GENOME_SIZE=""                        #chromosome size 
+TRIM_ADAPTER="Y"                      #whether to trim adapter given raw reads
+THREAD_NUM=6                          #number of threads
+PHRED=64                              #the default of base quality is in Phred64
+REMV_DUP="Y"                          #whether remove duplicates
+ADAPTOR="TruSeq2"                     #the default of adaptor sequence is TruSeq2
+KEEP_FILE="N"                         #keep intermediate results
+CUT_END=""                            #Restriction enzyme cut sequence
+MINMQ=30                              #Minimum mapping quality
+
+
+source $LIB_PATH/config
+
+export PATH=$FASTQC_HOME:$BWA_HOME:$SAMTOOLS_HOME:$BEDTOOLS_HOME:$PATH
+
+
+CHECK_AVAILABLE=0
+which java &>/dev/null     || { echo "java not found!";     CHECK_AVAILABLE=1; }
+which R &>/dev/null        || { echo "R not found!";        CHECK_AVAILABLE=1; }
+which bwa &>/dev/null      || { echo "bwa not found!";      CHECK_AVAILABLE=1; }
+which samtools &>/dev/null || { echo "samtools not found!"; CHECK_AVAILABLE=1; }
+
+
+if [ $CHECK_AVAILABLE -ne 0 ]
+then
+    exit 1
+fi
+
+function helps
+{
+    echo ""
+    echo -e "Usage: easyC [option] <Reads1_1.fq> <Reads1_2.fq> \c"
+    echo ""
+    echo " -r STRING        genome reference fasta file path"
+    echo " -s STRING        chromsome size"
+    echo " -x               input is clean reads"
+    echo " -t INT           number of threads[6]"
+    echo " -c STRING        restriction enzyme cut sequence"
+    echo " -l               base quality is Phred33 encoded"
+    echo " -d               keep duplicates [default is to remove duplicates]"
+    echo " -k               keep intermediate results [default is to remove]"
+    echo " -a STRING        adaptor system [default is TruSeq2]"
+    echo " -m INT           minimum mapping quality [default is 30]"
+    echo " -v               program version"
+    echo " -h               help"
+    echo ""       
+}
+
+if [ $# -eq 0 ]
+then
+    helps
+    exit 0
+fi
+
+
+while getopts "r:s:xt:c:ldka:m:vh" optionName
+do
+    case "$optionName" in
+    r) REF_GENOME="$OPTARG";;
+    s) GENOME_SIZE="$OPTARG";;
+    x) TRIM_ADAPTER="N";;
+    t) THREAD_NUM=$OPTARG;;
+    c) CUT_END=$OPTARG;;
+    l) PHRED=33;;
+    d) REMV_DUP="N";;
+    d) KEEP_FILE="Y";;
+    a) ADAPTOR="$OPTARG";;
+    m) MINMQ="$OPTARG";;
+    v) echo "Version: $VERSION"
+       exit 0
+       ;;
+    h|[?])
+       helps
+       exit 0
+       ;;
+    esac
+done
+shift $(($OPTIND - 1))
+READS=$@
+
+
+echo "-------------------------------------------------------------"
+echo "            Welcome to use easyC"
+echo "               ---- A tool for HiC data analysis"
+echo ""
+echo "  Version: $VERSION"
+echo "  Copyright (C) 2016 - 2017  Center for Bioinformatics, PKU"
+echo "-------------------------------------------------------------"
+echo ""
+
+
+# Create log directory if necessory
+if [ ! -d log ]
+then
+    mkdir log
+fi
+
+
+echo "Configuration:" >> log/journal
+echo "Reference genome          : $REF_GENOME"   >> log/journal
+echo "Remove duplicates         : $REMV_DUP"     >> log/journal
+echo "Trim adaptors             : $TRIM_ADAPTER" >> log/journal
+echo "Adaptor system            : $ADAPTOR"      >> log/journal
+echo "Restriction enzyme cut    : $CUT_END"      >> log/journal
+echo "" >> log/journal
+
+
+echo "Program Version:"                                | tee -a log/journal
+echo "R        : $(R --version | grep version | head -n 1 | cut -f3 -d' ')" \
+                                                       | tee -a log/journal
+echo "Java     : $(java -version 2>&1 | head -n 1 | cut -f2 -d'"')" \
+                                                       | tee -a log/journal
+echo "FastQC   : $(fastqc -v | cut -f2 -d' ')"         | tee -a log/journal
+echo "BWA      : $(bwa 2>&1 | grep Version | cut -d' ' -f2)" \
+                                                       | tee -a log/journal
+echo "" | tee -a log/journal
+
+echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tPipeline begin\t0\t[OK]" \
+| tee -a log/journal
+
+
+
+
+#
+# Check the quality of input reads 
+#
+if [ ! -d fastqc/raw ]
+then
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of input reads begin\t0\t[OK]" \
+    | tee -a log/journal
+
+    mkdir -p fastqc/raw
+    
+    fastqc -o fastqc/raw -t $THREAD_NUM $READS 2>/dev/null 1>&2
+    
+    rm -f fastqc/raw/*.zip
+
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of input reads finished\t0\t[OK]" \
+    | tee -a log/journal
+fi
+
+
+#
+# Clean the raw reads
+#
+if [ $TRIM_ADAPTER == 'Y' ]
+then
+    $LIB_PATH/clean_rawreads.sh $THREAD_NUM $PHRED PE $TRIM_HOME $ADAPTOR \
+    $READS 2>>log/trim.log | tee -a log/journal
+    
+    STATUS=${PIPESTATUS[0]}
+    
+    if [ $STATUS -eq 1 ]
+    then
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tClean raw reads failed\t0\t[FAIL]" \
+        | tee -a log/journal
+        echo ""
+        echo "------------------------------------------------------------"
+        echo "Something bad happened. Details are in the log directory."
+        echo "See you next time!"
+        echo "------------------------------------------------------------"
+        echo ""
+        exit 1
+    fi
+    
+    PHRED=33
+    
+    if [ $STATUS -eq 0 ]
+    then
+        TMP=""
+        for item in $READS
+        do
+            ID=${item##*/}
+            ID=${ID%%.*}
+            TMP="$TMP ${ID}.clean.fq"
+        done
+        READS=$TMP
+    
+        #
+        # Check the quality of the cleaned reads
+        #
+        if [ ! -d fastqc/clean ]
+        then
+            echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of cleaned reads begin\t0\t[OK]" \
+            | tee -a log/journal
+
+            mkdir -p fastqc/clean
+            
+            fastqc -o fastqc/clean -t $THREAD_NUM $READS 2>/dev/null 1>&2
+            
+            rm -f fastqc/clean/*.zip
+
+            echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of cleaned reads finished\t0\t[OK]" \
+            | tee -a log/journal
+        fi
+    fi
+fi
+
+
+
+
+#
+# Generate restriction enzyme digested genome regions
+#
+DIGEST=${REF_GENOME%.fasta}
+DIGEST=${DIGEST%.fa}.$CUT_END.digest.bed
+if [ ! -f $DIGEST ]
+then
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tDigest genome begin\t0\t[OK]" \
+    | tee -a log/journal
+
+    $LIB_PATH/digest.py --cut $CUT_END $REF_GENOME > $DIGEST
+
+    if [ $? -ne 0 ]
+    then
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tDigest genome failed\t0\t[FAIL]" \
+        | tee -a log/journal
+        echo ""
+        echo "------------------------------------------------------------"
+        echo "Something bad happened. Details are in the log directory."
+        echo "See you next time!"
+        echo "------------------------------------------------------------"
+        echo ""
+        exit 1
+    fi
+
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tDigest genome finished\t0\t[OK]" \
+    | tee -a log/journal
+fi
+
+
+
+
+#
+# Find contacts
+#
+set $READS
+while [ $# -gt 0 ]
+do
+    reads1=$1
+    reads2=$2
+    shift 2
+
+    $LIB_PATH/find_contacts.sh $THREAD_NUM $REMV_DUP $KEEP_FILE $REF_GENOME \
+    $DIGEST $CUT_END $MINMQ $reads1 $reads2 2>>log/find_contacts.log | tee -a log/journal
+
+    if [ ${PIPESTATUS[0]} -ne 0 ]
+    then
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tFind contacts failed\t0\t[FAIL]" \
+        | tee -a log/journal
+        echo ""
+        echo "------------------------------------------------------------"
+        echo "Something bad happened. Details are in the log directory."
+        echo "See you next time!"
+        echo "------------------------------------------------------------"
+        echo ""
+        exit 1
+    fi
+done
+
+
+if [ "$KEEP_FILE" == 'N' ]
+then
+    # remove cleaned reads
+    if [ $TRIM_ADAPTER == 'Y' ]
+    then
+        rm -f $READS
+    fi
+fi
+
+
+
+
+
+
+# Pipeline finished
+echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tPipeline finished\t0\t[OK]" \
+| tee -a log/journal
+
+echo ""
+echo "------------------------------------------------------------"
+echo "Congratulate! Pipeline finished successfully at $(date)."
+echo "Bye!"
+echo "------------------------------------------------------------"
+echo ""
+
+exit 0
+
+
+
+
