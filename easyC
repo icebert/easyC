@@ -26,8 +26,11 @@ PHRED=64                              #the default of base quality is in Phred64
 REMV_DUP="Y"                          #whether remove duplicates
 ADAPTOR="TruSeq2"                     #the default of adaptor sequence is TruSeq2
 KEEP_FILE="N"                         #keep intermediate results
-CUT_END=""                            #Restriction enzyme cut sequence
+CUT_SEQ=""                            #Restriction enzyme recognize sequence
+CUT_POINT=""                          #Restriction enzyme cleavage point
 MINMQ=30                              #Minimum mapping quality
+NAME=""                               #Cell line name
+RESOLUTION=5000                       #Contact matrix resolution
 
 
 source $LIB_PATH/config
@@ -56,12 +59,15 @@ function helps
     echo " -s STRING        chromsome size"
     echo " -x               input is clean reads"
     echo " -t INT           number of threads[6]"
-    echo " -c STRING        restriction enzyme cut sequence"
+    echo " -c STRING        restriction enzyme recognize sequence"
+    echo " -p INT           restriction enzyme cleavage point"
     echo " -l               base quality is Phred33 encoded"
     echo " -d               keep duplicates [default is to remove duplicates]"
     echo " -k               keep intermediate results [default is to remove]"
     echo " -a STRING        adaptor system [default is TruSeq2]"
     echo " -m INT           minimum mapping quality [default is 30]"
+    echo " -n STRING        cell line name"
+    echo " -e INT           contact matrix resolution [default is 5000]"
     echo " -v               program version"
     echo " -h               help"
     echo ""       
@@ -74,26 +80,29 @@ then
 fi
 
 
-while getopts "r:s:xt:c:ldka:m:vh" optionName
+while getopts "r:s:xt:c:p:ldka:m:n:e:vh" optionName
 do
     case "$optionName" in
-    r) REF_GENOME="$OPTARG";;
-    s) GENOME_SIZE="$OPTARG";;
-    x) TRIM_ADAPTER="N";;
-    t) THREAD_NUM=$OPTARG;;
-    c) CUT_END=$OPTARG;;
-    l) PHRED=33;;
-    d) REMV_DUP="N";;
-    d) KEEP_FILE="Y";;
-    a) ADAPTOR="$OPTARG";;
-    m) MINMQ="$OPTARG";;
-    v) echo "Version: $VERSION"
-       exit 0
-       ;;
-    h|[?])
-       helps
-       exit 0
-       ;;
+        r) REF_GENOME="$OPTARG";;
+        s) GENOME_SIZE="$OPTARG";;
+        x) TRIM_ADAPTER="N";;
+        t) THREAD_NUM=$OPTARG;;
+        c) CUT_SEQ="$OPTARG";;
+        p) CUT_POINT=$OPTARG;;
+        l) PHRED=33;;
+        d) REMV_DUP="N";;
+        d) KEEP_FILE="Y";;
+        a) ADAPTOR="$OPTARG";;
+        m) MINMQ="$OPTARG";;
+        n) NAME="$OPTARG";;
+        e) RESOLUTION="$OPTARG";;
+        v) echo "Version: $VERSION"
+           exit 0
+           ;;
+        h|[?])
+           helps
+           exit 0
+           ;;
     esac
 done
 shift $(($OPTIND - 1))
@@ -122,7 +131,8 @@ echo "Reference genome          : $REF_GENOME"   >> log/journal
 echo "Remove duplicates         : $REMV_DUP"     >> log/journal
 echo "Trim adaptors             : $TRIM_ADAPTER" >> log/journal
 echo "Adaptor system            : $ADAPTOR"      >> log/journal
-echo "Restriction enzyme cut    : $CUT_END"      >> log/journal
+echo "Restriction enzyme recognize sequence : $CUT_SEQ"      >> log/journal
+echo "Restriction enzyme cleavage point     : $CUT_POINT"      >> log/journal
 echo "" >> log/journal
 
 
@@ -133,6 +143,10 @@ echo "Java     : $(java -version 2>&1 | head -n 1 | cut -f2 -d'"')" \
                                                        | tee -a log/journal
 echo "FastQC   : $(fastqc -v | cut -f2 -d' ')"         | tee -a log/journal
 echo "BWA      : $(bwa 2>&1 | grep Version | cut -d' ' -f2)" \
+                                                       | tee -a log/journal
+echo "samtools : $(samtools 2>&1 | grep Version | cut -d' ' -f2)" \
+                                                       | tee -a log/journal
+echo "bedtools : $(bedtools --version | cut -d' ' -f2)" \
                                                        | tee -a log/journal
 echo "" | tee -a log/journal
 
@@ -224,13 +238,13 @@ fi
 # Generate restriction enzyme digested genome regions
 #
 DIGEST=${REF_GENOME%.fasta}
-DIGEST=${DIGEST%.fa}.$CUT_END.digest.bed
+DIGEST=${DIGEST%.fa}.$CUT_SEQ.digest.bed
 if [ ! -f $DIGEST ]
 then
     echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tDigest genome begin\t0\t[OK]" \
     | tee -a log/journal
 
-    $LIB_PATH/digest.py --cut $CUT_END $REF_GENOME > $DIGEST
+    $LIB_PATH/digest.py --seq $CUT_SEQ --point $CUT_POINT $REF_GENOME > $DIGEST
 
     if [ $? -ne 0 ]
     then
@@ -263,7 +277,7 @@ do
     shift 2
 
     $LIB_PATH/find_contacts.sh $THREAD_NUM $REMV_DUP $KEEP_FILE $REF_GENOME \
-    $DIGEST $CUT_END $MINMQ $reads1 $reads2 2>>log/find_contacts.log | tee -a log/journal
+    $DIGEST $CUT_SEQ $CUT_POINT $MINMQ $reads1 $reads2 2>>log/find_contacts.log | tee -a log/journal
 
     if [ ${PIPESTATUS[0]} -ne 0 ]
     then
@@ -290,7 +304,26 @@ then
 fi
 
 
-
+#
+# Generate contact matrix
+#
+#CONTACTS=""
+#
+#$LIB_PATH/generate_matrix $THREAD_NUM $NAME $RESOLUTION N $GENOME_SIZE $DIGEST $CONTACTS \
+#                          2>>log/generate_matrix.log | tee -a log/journal
+#
+#if [ ${PIPESTATUS[0]} -ne 0 ]
+#then
+#    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerate contact matrix failed\t0\t[FAIL]" \
+#    | tee -a log/journal
+#    echo ""
+#    echo "------------------------------------------------------------"
+#    echo "Something bad happened. Details are in the log directory."
+#    echo "See you next time!"
+#    echo "------------------------------------------------------------"
+#    echo ""
+#    exit 1
+#fi
 
 
 

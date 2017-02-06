@@ -5,10 +5,10 @@
 # and generate the contact pairs.
 #
 
-if [ $# -ne 9 ]
+if [ $# -ne 10 ]
 then
     echo "Usage: find_contacts.sh <thread number> <remove duplicates> <keep intermediate file>"
-    echo "           <reference> <digest genome> <cut end> <min mapping quality>"
+    echo "           <reference> <digest genome> <cut seq> <cut point> <min mapping quality>"
     echo "           <Read_1.fq> <Reads_2.fq>"
     echo ""
     exit 1
@@ -19,9 +19,10 @@ REMV_DUP=$2
 KEEP_FILE=$3
 REF_GENOME=$4
 DIGEST=$5
-CUT_END=$6
-MINMQ=$7
-shift 7
+CUT_SEQ=$6
+CUT_POINT=$7
+MINMQ=$8
+shift 8
 
 READS1=$1
 READS2=$2
@@ -100,7 +101,7 @@ echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tReads mapping finished"
 #
 echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegin generating contact pairs\t0\t[OK]"
 
-$LIB_PATH/hicpair.py --minmq $MINMQ --cutend $CUT_END --digest $DIGEST ${ID}_1.sam ${ID}_2.sam \
+$LIB_PATH/hicpair.py --minmq $MINMQ --cutseq $CUT_SEQ --cutpoint $CUT_POINT --digest $DIGEST ${ID}_1.sam ${ID}_2.sam \
           1>contacts.tsv 2>log/statistics
 
 if [ $? -ne 0 ]

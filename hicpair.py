@@ -9,10 +9,11 @@ parser = argparse.ArgumentParser(description='Generate HiC contact read pairs')
 parser.add_argument('sam1', type=str, help='Mapped reads 1 in sam format')
 parser.add_argument('sam2', type=str, help='Mapped reads 2 in sam format')
 
-parser.add_argument('--minmq',  type=int, default=1,  help='The minimum mapping quality [Default 1]')
-parser.add_argument('--cutend', type=str, default='', help='Restriction enzyme cut end')
-parser.add_argument('--digest', type=str, default='', help='Digested genome in bed format')
-parser.add_argument('--out',    type=str, default='stdout', help='output file name [Default stdout]')
+parser.add_argument('--minmq',    type=int, default=1,  help='The minimum mapping quality [Default 1]')
+parser.add_argument('--cutseq',   type=str, default='', help='Restriction enzyme cut sequence')
+parser.add_argument('--cutpoint', type=int, default=0, help='Restriction enzyme cleavage point')
+parser.add_argument('--digest',   type=str, default='', help='Digested genome in bed format')
+parser.add_argument('--out',      type=str, default='stdout', help='output file name [Default stdout]')
 
 args = parser.parse_args()
 
@@ -21,6 +22,18 @@ if args.out == 'stdout':
 else:
     out = open(args.out, 'w')
 
+
+def complement(nt):
+    if nt == 'A' or nt == 'a': return 'T'
+    if nt == 'T' or nt == 't': return 'A'
+    if nt == 'C' or nt == 'c': return 'G'
+    if nt == 'G' or nt == 'g': return 'C'
+    return 'N'
+
+def rc(seq):
+    cseq = [complement(seq[i]) for i in range(0, len(seq))]
+    cseq = ''.join(cseq)
+    return cseq[::-1]
 
 
 def parse(read):
@@ -42,7 +55,7 @@ def getEnd(start, cigar):
             length += sizes[i]
     return start + length
 
-def checkSeq(cigar, seq, cutend):
+def checkSeq(cigar, seq, cutendl, cutendr):
     types = re.split('\d+', cigar)[1:]
     sizes = re.split('[A-Z]', cigar)[:-1]
     sizes = [int(size) for size in sizes]
@@ -61,33 +74,37 @@ def checkSeq(cigar, seq, cutend):
                 leni += sizes[i]
         seq1 = seq[0:leni]
         seq2 = seq[leni:]
-        seq1 = seq1[-(len(cutend)*2-1):]
-        seq2 = seq2[0:(len(cutend)*2-1)]
+        seq1 = seq1[-(len(cutendl)*2-1):]
+        seq2 = seq2[0:(len(cutendr)*2-1)]
         if seq1 == '':
-            end = seq2.find(cutend)
-            if end == -1: return False
-            if cutend.endswith(seq2[0:end]):
+            end1 = seq2.find(cutendr)
+            end2 = seq2.find(rc(cutendl))
+            if end1 == -1 and end2 == -1: return False
+            if (end1 != -1 and cutendl.endswith(seq2[0:end1])) or (end2 != -1 and rc(cutendr).endswith(seq2[0:end2])):
                 return True
             else:
                 return False
         if seq2 == '':
-            start = seq1.find(cutend)
-            if start == -1: return False
-            if cutend.startswith(seq1[(start+len(cutend)):]):
+            start1 = seq1.find(cutendl)
+            start2 = seq1.find(rc(cutendr))
+            if start1 == -1 and start2 == -1: return False
+            if (start1 != -1 and cutendr.startswith(seq1[(start1+len(cutendl)):])) or (start2 != -1 and rc(cutendl).startswith(seq1[(start2+len(cutendr)):])):
                 return True
             else:
                 return False
         if types[maxi] == 'M':
-            start = seq1.find(cutend)
-            if start == -1: return False
-            if (seq1[(start+len(cutend)):]+seq2).startswith(cutend):
+            start1 = seq1.find(cutendl)
+            start2 = seq1.find(rc(cutendr))
+            if start1 == -1 and start2 == -1: return False
+            if (start1 != -1 and (seq1[(start1+len(cutendl)):]+seq2).startswith(cutendr)) or (start2 != -1 and (seq1[(start2+len(cutendr)):]+seq2).startswith(rc(cutendl))):
                 return True
             else:
                 return False
         else:
-            end = seq2.find(cutend)
-            if end == -1: return False
-            if (seq1+seq2[0:end]).endswith(cutend):
+            end1 = seq2.find(cutendr)
+            end2 = seq2.find(rc(cutendl))
+            if end1 == -1 and end2 == -1: return False
+            if (end1 != -1 and (seq1+seq2[0:end1]).endswith(cutendl)) or (end2 != -1 and (seq1+seq2[0:end2]).endswith(rc(cutendr))):
                 return True
             else:
                 return False
@@ -172,16 +189,23 @@ while True:
             lowQuality += 1
 
     #Cut end filter
-    if args.cutend:
+    if args.cutseq:
+        if args.cutpoint < len(args.cutseq) - args.cutpoint:
+            cutendl = args.cutseq[0:len(args.cutseq)-args.cutpoint]
+            cutendr = args.cutseq[args.cutpoint:]
+        else:
+            cutendl = args.cutseq[0:args.cutpoint]
+            cutendr = args.cutseq[len(args.cutseq)-args.cutpoint:]
+
         if len(group1) > 1:
             for i in range(0, len(group1)):
                 if group1[i]:
-                    if not checkSeq(group1[i][4], group1[i][5], args.cutend):
+                    if not checkSeq(group1[i][4], group1[i][5], cutendl, cutendr):
                         group1[i] = None
         if len(group2) > 1:
             for i in range(0, len(group2)):
                 if group2[i]:
-                    if not checkSeq(group2[i][4], group2[i][5], args.cutend):
+                    if not checkSeq(group2[i][4], group2[i][5], cutendl, cutendr):
                         group2[i] = None
 
     #Output
