@@ -1,5 +1,5 @@
 TRIM_HOME=/lustre/tools/Trimmomatic
 FASTQC_HOME=/lustre/tools/fastqc
 BWA_HOME=/lustre/tools/bwa
-AMTOOLS_HOME=/lustre/tools/samtools
+SAMTOOLS_HOME=/lustre/tools/samtools
 BEDTOOLS_HOME=/lustre/tools/bedtools
