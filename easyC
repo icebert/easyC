@@ -12,7 +12,7 @@
 # This script is the integration of all protocols from raw reads processing
 # to contact matrix generating.
 #
-# Written by Wang Meng, 2016-06-13.
+# Written by Wang Meng.
 
 VERSION=0.1
 
@@ -21,7 +21,8 @@ LIB_PATH=$(dirname $(readlink -e $0)) #absolute path of this file
 REF_GENOME=""                         #reference genome file path
 GENOME_SIZE=""                        #chromosome size 
 TRIM_ADAPTER="Y"                      #whether to trim adapter given raw reads
-THREAD_NUM=6                          #number of threads
+NODE_NUM=1                            #number of nodes to run
+THREAD_NUM=6                          #number of threads per node
 PHRED=64                              #the default of base quality is in Phred64
 REMV_DUP="Y"                          #whether remove duplicates
 ADAPTOR="TruSeq2"                     #the default of adaptor sequence is TruSeq2
@@ -53,12 +54,13 @@ fi
 function helps
 {
     echo ""
-    echo -e "Usage: easyC [option] <Reads1_1.fq> <Reads1_2.fq> \c"
+    echo -e "Usage: easyC [option] <Reads1_1.fq> <Reads1_2.fq> ... <ReadsN_1.fq> <ReadsN_2.fq>\c"
     echo ""
     echo " -r STRING        genome reference fasta file path"
     echo " -s STRING        chromsome size"
     echo " -x               input is clean reads"
-    echo " -t INT           number of threads[6]"
+    echo " -u INT           number of nodes to run [1]"
+    echo " -t INT           number of threads per node [6]"
     echo " -c STRING        restriction enzyme recognize sequence"
     echo " -p INT           restriction enzyme cleavage point"
     echo " -l               base quality is Phred33 encoded"
@@ -80,18 +82,19 @@ then
 fi
 
 
-while getopts "r:s:xt:c:p:ldka:m:n:e:vh" optionName
+while getopts "r:s:xu:t:c:p:ldka:m:n:e:vh" optionName
 do
     case "$optionName" in
         r) REF_GENOME="$OPTARG";;
         s) GENOME_SIZE="$OPTARG";;
         x) TRIM_ADAPTER="N";;
+        u) NODE_NUM=$OPTARG;;
         t) THREAD_NUM=$OPTARG;;
         c) CUT_SEQ="$OPTARG";;
         p) CUT_POINT=$OPTARG;;
         l) PHRED=33;;
         d) REMV_DUP="N";;
-        d) KEEP_FILE="Y";;
+        k) KEEP_FILE="Y";;
         a) ADAPTOR="$OPTARG";;
         m) MINMQ="$OPTARG";;
         n) NAME="$OPTARG";;
@@ -157,84 +160,6 @@ echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tPipeline begin\t0\t[OK]" \
 
 
 #
-# Check the quality of input reads 
-#
-if [ ! -d fastqc/raw ]
-then
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of input reads begin\t0\t[OK]" \
-    | tee -a log/journal
-
-    mkdir -p fastqc/raw
-    
-    fastqc -o fastqc/raw -t $THREAD_NUM $READS 2>/dev/null 1>&2
-    
-    rm -f fastqc/raw/*.zip
-
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of input reads finished\t0\t[OK]" \
-    | tee -a log/journal
-fi
-
-
-#
-# Clean the raw reads
-#
-if [ $TRIM_ADAPTER == 'Y' ]
-then
-    $LIB_PATH/clean_rawreads.sh $THREAD_NUM $PHRED PE $TRIM_HOME $ADAPTOR \
-    $READS 2>>log/trim.log | tee -a log/journal
-    
-    STATUS=${PIPESTATUS[0]}
-    
-    if [ $STATUS -eq 1 ]
-    then
-        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tClean raw reads failed\t0\t[FAIL]" \
-        | tee -a log/journal
-        echo ""
-        echo "------------------------------------------------------------"
-        echo "Something bad happened. Details are in the log directory."
-        echo "See you next time!"
-        echo "------------------------------------------------------------"
-        echo ""
-        exit 1
-    fi
-    
-    PHRED=33
-    
-    if [ $STATUS -eq 0 ]
-    then
-        TMP=""
-        for item in $READS
-        do
-            ID=${item##*/}
-            ID=${ID%%.*}
-            TMP="$TMP ${ID}.clean.fq"
-        done
-        READS=$TMP
-    
-        #
-        # Check the quality of the cleaned reads
-        #
-        if [ ! -d fastqc/clean ]
-        then
-            echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of cleaned reads begin\t0\t[OK]" \
-            | tee -a log/journal
-
-            mkdir -p fastqc/clean
-            
-            fastqc -o fastqc/clean -t $THREAD_NUM $READS 2>/dev/null 1>&2
-            
-            rm -f fastqc/clean/*.zip
-
-            echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tCheck quality of cleaned reads finished\t0\t[OK]" \
-            | tee -a log/journal
-        fi
-    fi
-fi
-
-
-
-
-#
 # Generate restriction enzyme digested genome regions
 #
 DIGEST=${REF_GENOME%.fasta}
@@ -265,10 +190,67 @@ fi
 
 
 
+# if reference genome index doesn't exist, first build the index
+if [ ! -e "$REF_GENOME.bwt" ]
+then
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegin bwa index\t0\t[OK]" \
+    | tee -a log/journal
+    
+    bwa index -a bwtsw $REF_GENOME
+    
+    if [ $? != 0 ]
+    then
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tOops, error occurred when \
+        bwa index\t0\t[FAIL]" | tee -a log/journal
+        exit 1
+    fi
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tbwa index finished successfully\t0\t[OK]"\
+    | tee -a log/journal
+fi
+
+
 
 #
-# Find contacts
+# Find contact pairs of each library
 #
+if [ "$TRIM_ADAPTER" == "Y" ]
+then
+    TRIM_ADAPTER=""
+else
+    TRIM_ADAPTER="-x"
+fi
+if [ "$REMV_DUP" == "Y" ]
+then
+    REMV_DUP=""
+else
+    REMV_DUP="-d"
+fi
+if [ "$KEEP_FILE" == "N" ]
+then
+    KEEP_FILE=""
+else
+    KEEP_FILE="-k"
+fi
+if [ "$PHRED" -eq 64 ]
+then
+    PHRED=""
+else
+    PHRED="-l"
+fi
+
+
+mkfifo "log/$$.fifo"
+exec 6<>"log/$$.fifo"
+rm "log/$$.fifo"
+for ((i=0;i<$NODE_NUM;i++))
+do
+    echo
+done >&6
+
+
+
+CONTACTS=""
+
 set $READS
 while [ $# -gt 0 ]
 do
@@ -276,13 +258,25 @@ do
     reads2=$2
     shift 2
 
-    $LIB_PATH/find_contacts.sh $THREAD_NUM $REMV_DUP $KEEP_FILE $REF_GENOME \
-    $DIGEST $CUT_SEQ $CUT_POINT $MINMQ $reads1 $reads2 2>>log/find_contacts.log | tee -a log/journal
+    LIB=${reads1%/*}
+    CONTACTS="$CONTACTS $LIB/contacts.sorted.rmdup.tsv"
+    reads1=${reads1##*/}
+    reads2=${reads2##*/}
+
+
+read -u6
+{
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerating contact pairs from reads \
+            library ${LIB}\t0\t[OK]" | tee -a log/journal
+
+    $LIB_PATH/reads_to_contacts.sh -r $REF_GENOME $TRIM_ADAPTER -t $THREAD_NUM \
+                                   -c $CUT_SEQ -p $CUT_POINT $PHRED $REMV_DUP $KEEP_FILE \
+                                   -a $ADAPTOR -m $MINMQ -w $LIB $reads1 $reads2
 
     if [ ${PIPESTATUS[0]} -ne 0 ]
     then
-        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tFind contacts failed\t0\t[FAIL]" \
-        | tee -a log/journal
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerating contact pairs from raw \
+        reads ${LIB} failed\t0\t[FAIL]" | tee -a log/journal
         echo ""
         echo "------------------------------------------------------------"
         echo "Something bad happened. Details are in the log directory."
@@ -291,39 +285,42 @@ do
         echo ""
         exit 1
     fi
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerating contact pairs from reads \
+            library ${LIB} finished successfully\t0\t[OK]" | tee -a log/journal
+echo >&6
+} &
 done
 
+wait
+exec 6>&-
 
-if [ "$KEEP_FILE" == 'N' ]
-then
-    # remove cleaned reads
-    if [ $TRIM_ADAPTER == 'Y' ]
-    then
-        rm -f $READS
-    fi
-fi
+
 
 
 #
 # Generate contact matrix
 #
-#CONTACTS=""
+echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegain generating contact matrix" | tee -a log/journal
+
+$LIB_PATH/generate_matrix.sh $THREAD_NUM $NAME $RESOLUTION N $GENOME_SIZE $DIGEST $CONTACTS \
+                             2>>log/generate_matrix.log | tee -a log/journal
 #
-#$LIB_PATH/generate_matrix $THREAD_NUM $NAME $RESOLUTION N $GENOME_SIZE $DIGEST $CONTACTS \
-#                          2>>log/generate_matrix.log | tee -a log/journal
-#
-#if [ ${PIPESTATUS[0]} -ne 0 ]
-#then
-#    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerate contact matrix failed\t0\t[FAIL]" \
-#    | tee -a log/journal
-#    echo ""
-#    echo "------------------------------------------------------------"
-#    echo "Something bad happened. Details are in the log directory."
-#    echo "See you next time!"
-#    echo "------------------------------------------------------------"
-#    echo ""
-#    exit 1
-#fi
+if [ ${PIPESTATUS[0]} -ne 0 ]
+then
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerate contact matrix failed\t0\t[FAIL]" \
+    | tee -a log/journal
+    echo ""
+    echo "------------------------------------------------------------"
+    echo "Something bad happened. Details are in the log directory."
+    echo "See you next time!"
+    echo "------------------------------------------------------------"
+    echo ""
+    exit 1
+fi
+
+echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerating contact matrix finished successfully\t0\t[OK]" \
+| tee -a log/journal
+
 
 
 

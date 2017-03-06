@@ -26,7 +26,6 @@ export OMP_NUM_THREADS=$THREAD_NUM
 
 
 
-echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegain generate contact matrix"
 
 rm -rf $NAME/$RESOLUTION
 
@@ -114,11 +113,6 @@ do
         rm -f $INPUT
     done
 done
-
-
-echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tGenerating contact matrix finished successfully\t0\t[OK]"
-
-
 
 
 exit 0

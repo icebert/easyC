@@ -41,21 +41,12 @@ echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegain reads mapping ..."
 
 
 
-# if index doesn't exist, first build the index
+# Check whether reference genome index exists
 if [ ! -e "$REF_GENOME.bwt" ]
 then
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tBegin bwa index\t0\t[OK]"
-    
-    time bwa index -a bwtsw $REF_GENOME
-    
-    if [ $? != 0 ]
-    then
-        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tOops, error occurred when \
-        bwa index\t0\t[FAIL]"
+        echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tOops, cannot find bwa indexed \
+        reference genome\t0\t[FAIL]"
         exit 1
-    fi
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S')\tbwa index finished\
-    successfully\t0\t[OK]"
 fi
 
 
