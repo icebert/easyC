@@ -4,7 +4,7 @@
 # This script is to generate contact matrix
 #
 
-if [ $# -le 7 ]
+if [ $# -ne 7 ]
 then
     echo "Usage: generate_matrix.sh <thread number> <name> <resolution>"
     echo "       <normalize> <genome size> <digest genome> <contacts.tsv>"

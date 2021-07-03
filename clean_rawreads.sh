@@ -89,76 +89,13 @@ do
         ID2=${ID2%%.*}
     fi
     
-    if [ $PHRED -eq 33 ]
-    then
-        FQ_VERSION="-phred33"
-    else
-        FQ_VERSION="-phred64"
-    fi
-    
-    #
-    # When fastqc results are available, try to determine the 
-    # phred of fastq through fastqc report.
-    #
-    ID=${reads1##*/}
-    ID=${ID%.gz}
-    ID=${ID%.fastq}
-    
-    ENCODING=""
-    if [ -f fastqc/raw/${ID}_fastqc.html ]
-    then
-        ENCODING=$(cat fastqc/raw/${ID}_fastqc.html | grep "Encoding" \
-                   | sed 's/.*<td>Encoding<\/td>//' | cut -f2 -d '>' \
-                   | cut -f1 -d'<')
-    elif [ -f fastqc/raw/control/${ID}_fastqc.html ]
-    then
-        ENCODING=$(cat fastqc/raw/control/${ID}_fastqc.html | grep "Encoding" \
-                   | sed 's/.*<td>Encoding<\/td>//' | cut -f2 -d '>' \
-                   | cut -f1 -d'<')
-    fi
-    if [ "$ENCODING" == "Sanger / Illumina 1.9" ]
-    then
-        FQ_VERSION="-phred33"
-        if [ $SEPE == "SE" ]
-        then
-            echo "Detect reads $reads1 base quality are Phred33"
-        else
-            echo "Detect reads $reads1 and $reads2 base quality are Phred33"
-        fi
-    elif [ "$ENCODING" == "Illumina 1.3" ]
-    then
-        FQ_VERSION="-phred64"
-        if [ $SEPE == "SE" ]
-        then
-            echo "Detect reads $reads1 base quality are Phred64"
-        else
-            echo "Detect reads $reads1 and $reads2 base quality are Phred64"
-        fi
-    elif [ "$ENCODING" == "Illumina 1.5" ]
-    then
-        FQ_VERSION="-phred64"
-        if [ $SEPE == "SE" ]
-        then
-            echo "Detect reads $reads1 base quality are Phred64"
-        else
-            echo "Detect reads $reads1 and $reads2 base quality are Phred64"
-        fi
-    else
-        if [ $SEPE == "SE" ]
-        then
-            echo "User assume reads $reads1 base quality are Phred$PHRED"
-        else
-            echo "User assume reads $reads1 and $reads2 base quality are Phred$PHRED"
-        fi
-    fi
-    
     
     if [ $SEPE == "PE" ]
     then
-        java -jar $TRIM_HOME/trimmomatic.jar PE $FQ_VERSION -threads $THREAD_NUM \
+        java -jar $TRIM_HOME/trimmomatic.jar PE -threads $THREAD_NUM \
         "${reads1}" "${reads2}" "${ID1}.clean.fq" "${ID1}.clean.fq.single" \
         "${ID2}.clean.fq" "${ID2}.clean.fq.single" \
-        ILLUMINACLIP:$TRIM_HOME/adapters/$ADAPTOR-$SEPE.fa:2:30:7 LEADING:3 \
+        ILLUMINACLIP:$TRIM_HOME/adapters/$ADAPTOR-$SEPE.fa:2:30:10:1:true LEADING:3 \
         TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 TOPHRED33 1>&2
 
         if [ $? != 0 ]
@@ -170,9 +107,9 @@ do
 
         rm -f ${ID1}.clean.fq.single ${ID2}.clean.fq.single
     else
-        java -jar $TRIM_HOME/trimmomatic.jar SE $FQ_VERSION -threads $THREAD_NUM \
+        java -jar $TRIM_HOME/trimmomatic.jar SE -threads $THREAD_NUM \
         "${reads1}" "${ID1}.clean.fq" \
-        ILLUMINACLIP:$TRIM_HOME/adapters/$ADAPTOR-$SEPE.fa:2:30:7 LEADING:3 \
+        ILLUMINACLIP:$TRIM_HOME/adapters/$ADAPTOR-$SEPE.fa:2:30:10 LEADING:3 \
         TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36 TOPHRED33 1>&2
 
         if [ $? != 0 ]
